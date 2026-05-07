@@ -1,0 +1,5 @@
+# Test dependencies for Gold layer transformation tests
+pytest==8.3.5
+hypothesis==6.131.15
+pandas==2.2.3
+numpy==2.2.5
