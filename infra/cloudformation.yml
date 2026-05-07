@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GA4 Analytics - Redshift Serverless + Spectrum IAM Role
+
+Parameters:
+  AdminUsername:
+    Type: String
+    Default: admin
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+  GlueCatalogAccount:
+    Type: String
+    Default: "092908647087"
+
+Resources:
+
+  # IAM Role for Redshift Spectrum
+  RedshiftSpectrumRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: redshift-spectrum-ga4
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+      Policies:
+        - PolicyName: SpectrumGlueAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:BatchGetPartition
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::google-analytics-80oeste-curated
+                  - arn:aws:s3:::google-analytics-80oeste-curated/*
+
+  # Redshift Serverless Namespace
+  RedshiftNamespace:
+    Type: AWS::RedshiftServerless::Namespace
+    Properties:
+      NamespaceName: ga4-analytics
+      AdminUsername: !Ref AdminUsername
+      AdminUserPassword: !Ref AdminPassword
+      DbName: ga4db
+      IamRoles:
+        - !GetAtt RedshiftSpectrumRole.Arn
+      DefaultIamRoleArn: !GetAtt RedshiftSpectrumRole.Arn
+
+  # Redshift Serverless Workgroup
+  RedshiftWorkgroup:
+    Type: AWS::RedshiftServerless::Workgroup
+    Properties:
+      WorkgroupName: ga4-workgroup
+      NamespaceName: !Ref RedshiftNamespace
+      BaseCapacity: 8
+      PubliclyAccessible: false
+      ConfigParameters:
+        - ParameterKey: enable_user_activity_logging
+          ParameterValue: "true"
+
+Outputs:
+  WorkgroupEndpoint:
+    Description: Redshift Serverless endpoint
+    Value: !GetAtt RedshiftWorkgroup.Workgroup.Endpoint.Address
+
+  SpectrumRoleArn:
+    Description: ARN of the Spectrum IAM role
+    Value: !GetAtt RedshiftSpectrumRole.Arn
+
+  SetupInstructions:
+    Description: Run in Redshift Query Editor after deploy
+    Value: |
+      -- Run infra/setup_ga4db.sql in Redshift Query Editor v2
+      -- Workgroup: ga4-workgroup | Database: ga4db
