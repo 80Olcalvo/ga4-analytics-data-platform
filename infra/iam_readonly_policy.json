@@ -1,0 +1,92 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RedshiftReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "redshift:DescribeClusters",
+        "redshift:DescribeClusterSubnetGroups",
+        "redshift:DescribeClusterParameterGroups",
+        "redshift:GetClusterCredentials",
+        "redshift-data:ExecuteStatement",
+        "redshift-data:DescribeStatement",
+        "redshift-data:GetStatementResult",
+        "redshift-data:ListStatements",
+        "redshift-data:ListDatabases",
+        "redshift-data:ListSchemas",
+        "redshift-data:ListTables",
+        "redshift-data:DescribeTable"
+      ],
+      "Resource": [
+        "arn:aws:redshift:us-east-1:720440144638:cluster:twb-redshift",
+        "arn:aws:redshift:us-east-1:720440144638:dbname:twb-redshift/twb_database",
+        "arn:aws:redshift:us-east-1:720440144638:dbuser:twb-redshift/*"
+      ]
+    },
+    {
+      "Sid": "RedshiftDataAPIGlobal",
+      "Effect": "Allow",
+      "Action": [
+        "redshift-data:ListStatements"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3ReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::twb-*",
+        "arn:aws:s3:::twb-*/*"
+      ]
+    },
+    {
+      "Sid": "GlueReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetPartition",
+        "glue:GetPartitions",
+        "glue:GetJob",
+        "glue:GetJobs",
+        "glue:GetJobRun",
+        "glue:GetJobRuns",
+        "glue:GetCrawler",
+        "glue:GetCrawlers",
+        "glue:ListJobs",
+        "glue:ListCrawlers"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFormationReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:ListStacks"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMReadSelf",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetUser",
+        "iam:ListAccessKeys",
+        "iam:GetAccessKeyLastUsed",
+        "iam:ListGroupsForUser"
+      ],
+      "Resource": "arn:aws:iam::720440144638:user/${aws:username}"
+    }
+  ]
+}
