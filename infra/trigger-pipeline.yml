@@ -1,0 +1,298 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GA4 Pipeline — EventBridge + Step Functions + Lambda + SNS
+
+Parameters:
+  RawBucket:
+    Type: String
+    Default: google-analytics-80oeste
+  CuratedBucket:
+    Type: String
+    Default: google-analytics-80oeste-curated
+  GlueJobName:
+    Type: String
+    Default: ga4-flatten-etl
+  GlueCrawlerName:
+    Type: String
+    Default: ga4-curated-crawler
+  RedshiftWorkgroup:
+    Type: String
+    Default: ga4-workgroup
+  RedshiftDatabase:
+    Type: String
+    Default: ga4db
+  NotificationEmail:
+    Type: String
+    Default: lcalvoa@80oeste.com
+
+Resources:
+
+  # SNS Topic for pipeline notifications
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ga4-pipeline-notifications
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+
+  # IAM Role for Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ga4-lambda-gold-refresh
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RedshiftDataAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - redshift-data:ExecuteStatement
+                  - redshift-data:DescribeStatement
+                  - redshift-serverless:GetCredentials
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopic
+
+  # IAM Role for Step Functions
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ga4-stepfunctions-pipeline
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GA4PipelineAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:StartCrawler
+                  - glue:GetCrawler
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt GoldRefreshLambda.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogDelivery
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # IAM Role for EventBridge
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ga4-eventbridge-trigger
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartStepFunctions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref GA4Pipeline
+
+  # Lambda: refreshes Gold tables in Redshift
+  GoldRefreshLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ga4-gold-refresh
+      Runtime: python3.12
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: lambda_gold_refresh.handler
+      Timeout: 300
+      Environment:
+        Variables:
+          WORKGROUP: !Ref RedshiftWorkgroup
+          DATABASE: !Ref RedshiftDatabase
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+          REDSHIFT_HOST: !Sub "${RedshiftWorkgroup}.${AWS::AccountId}.${AWS::Region}.redshift-serverless.amazonaws.com"
+      Code:
+        # Deploy via: aws lambda update-function-code --zip-file fileb://infra/lambda_gold_refresh.zip
+        ZipFile: |
+          def handler(event, context):
+              return {"status": "placeholder — deploy via CI/CD"}
+
+  # Step Functions: orchestrates the full pipeline
+  GA4Pipeline:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ga4-etl-pipeline
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "GA4 ETL Pipeline: Glue ETL -> Crawler -> Gold Refresh",
+          "StartAt": "NotifyStart",
+          "States": {
+            "NotifyStart": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] 🚀 Pipeline iniciado",
+                "Message": "Nuevo archivo .parquet detectado. Pipeline GA4 iniciado."
+              },
+              "Next": "RunGlueETL"
+            },
+            "RunGlueETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": { "JobName": "${GlueJobName}" },
+              "Next": "NotifyGlueSuccess",
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "NotifyGlueFailed" }]
+            },
+            "NotifyGlueSuccess": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] ✅ Paso 1/3 - Glue ETL completado",
+                "Message": "Glue ETL finalizado. Datos en S3 curated."
+              },
+              "Next": "RunCrawler"
+            },
+            "NotifyGlueFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] ❌ ERROR Paso 1/3 - Glue ETL falló",
+                "Message": "Glue ETL falló. Revisa CloudWatch logs."
+              },
+              "Next": "PipelineFailed"
+            },
+            "RunCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": { "Name": "${GlueCrawlerName}" },
+              "Next": "WaitForCrawler",
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "NotifyCrawlerFailed" }]
+            },
+            "WaitForCrawler": { "Type": "Wait", "Seconds": 30, "Next": "CheckCrawlerStatus" },
+            "CheckCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": { "Name": "${GlueCrawlerName}" },
+              "Next": "IsCrawlerDone",
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "NotifyCrawlerFailed" }]
+            },
+            "IsCrawlerDone": {
+              "Type": "Choice",
+              "Choices": [{ "Variable": "$.Crawler.State", "StringEquals": "READY", "Next": "NotifyCrawlerSuccess" }],
+              "Default": "WaitForCrawler"
+            },
+            "NotifyCrawlerSuccess": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] ✅ Paso 2/3 - Crawler completado",
+                "Message": "Crawler finalizado. Catálogo actualizado."
+              },
+              "Next": "RefreshGoldLayer"
+            },
+            "NotifyCrawlerFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] ❌ ERROR Paso 2/3 - Crawler falló",
+                "Message": "Crawler falló. Revisa CloudWatch logs."
+              },
+              "Next": "PipelineFailed"
+            },
+            "RefreshGoldLayer": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": { "FunctionName": "${GoldRefreshLambda}", "Payload": {} },
+              "Next": "PipelineSucceeded",
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "NotifyGoldFailed" }]
+            },
+            "NotifyGoldFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sns:publish",
+              "Parameters": {
+                "TopicArn": "${NotificationTopic}",
+                "Subject": "[GA4] ❌ ERROR Paso 3/3 - Refresh Oro falló",
+                "Message": "Lambda ga4-gold-refresh falló. Revisa CloudWatch logs."
+              },
+              "Next": "PipelineFailed"
+            },
+            "PipelineSucceeded": { "Type": "Succeed" },
+            "PipelineFailed": {
+              "Type": "Fail",
+              "Error": "PipelineError",
+              "Cause": "One or more pipeline steps failed"
+            }
+          }
+        }
+
+  # EventBridge: detects new parquets in S3
+  S3ParquetRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: ga4-s3-parquet-trigger
+      Description: Triggers pipeline when a new .parquet arrives in the raw bucket
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref RawBucket
+          object:
+            key:
+              - suffix: .parquet
+      State: ENABLED
+      Targets:
+        - Id: GA4Pipeline
+          Arn: !Ref GA4Pipeline
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+Outputs:
+  PipelineArn:
+    Value: !Ref GA4Pipeline
+    Description: Step Functions pipeline ARN
+
+  LambdaArn:
+    Value: !GetAtt GoldRefreshLambda.Arn
+    Description: Gold refresh Lambda ARN
+
+  NotificationTopicArn:
+    Value: !Ref NotificationTopic
+    Description: SNS Topic ARN — confirm subscription in your email
