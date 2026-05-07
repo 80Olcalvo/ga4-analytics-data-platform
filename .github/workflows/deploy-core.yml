@@ -1,0 +1,58 @@
+name: Deploy — Core Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/cloudformation.yml'
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm deployment to AWS'
+        required: true
+
+jobs:
+  deploy-core:
+    name: Deploy cloudformation.yml
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate input (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "Deployment not confirmed. Exiting."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Validate CloudFormation template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/cloudformation.yml
+
+      - name: Deploy core stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/cloudformation.yml \
+            --stack-name ga4-analytics \
+            --parameter-overrides AdminPassword=${{ secrets.REDSHIFT_ADMIN_PASSWORD }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Show stack outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ga4-analytics \
+            --query 'Stacks[0].Outputs' \
+            --output table

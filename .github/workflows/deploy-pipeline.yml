@@ -1,0 +1,74 @@
+name: Deploy — Pipeline Stack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/trigger-pipeline.yml'
+      - 'infra/lambda_gold_refresh.py'
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm deployment to AWS'
+        required: true
+
+jobs:
+  deploy-pipeline:
+    name: Deploy trigger-pipeline.yml + Lambda
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate input (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "Deployment not confirmed. Exiting."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Validate CloudFormation template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/trigger-pipeline.yml
+
+      - name: Deploy pipeline stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/trigger-pipeline.yml \
+            --stack-name ga4-pipeline-trigger \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Package Lambda
+        run: |
+          cd infra
+          zip lambda_gold_refresh.zip lambda_gold_refresh.py
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name ga4-gold-refresh \
+            --zip-file fileb://infra/lambda_gold_refresh.zip
+
+      - name: Wait for Lambda update
+        run: |
+          aws lambda wait function-updated \
+            --function-name ga4-gold-refresh
+
+      - name: Show Lambda version
+        run: |
+          aws lambda get-function-configuration \
+            --function-name ga4-gold-refresh \
+            --query '{FunctionName: FunctionName, Runtime: Runtime, LastModified: LastModified, CodeSize: CodeSize}' \
+            --output table
