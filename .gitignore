@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.hypothesis/
+*.coverage
+htmlcov/
+
+# AWS
+*.zip
+response.json
+output.json
+output_visitas.html
+passes
+
+# Credentials — never commit these
+infra/team_credentials_*.txt
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# Docs (generated reports — not source)
+docs/reporte-*.html
+docs/transacciones-*.csv
